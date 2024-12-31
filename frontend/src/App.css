@@ -36,3 +36,277 @@
     transform: rotate(360deg);
   }
 }
+
+/* Main container styles */
+.file-sync-container {
+  padding: 20px;
+}
+
+/* Integration grid */
+.integrations-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.integration-item {
+  position: relative;
+  text-align: center;
+}
+
+.integration-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.integration-logo {
+  width: 60px;
+  height: 60px;
+  border-radius: 8px;
+}
+
+.connection-status {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background-color: lightgrey;
+  color: black;
+  font-size: 10px;
+  font-weight: bold;
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+.integration-name {
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Integration selection */
+.integration-selection {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.integration-select-button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: white;
+}
+
+.integration-select-button.selected {
+  background-color: #007BFF;
+}
+
+.integration-select-button.unselected {
+  background-color: #ccc;
+}
+
+/* Browse button */
+.browse-button {
+  margin-top: 20px;
+  padding: 10px 20px;
+  background-color: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* Files display */
+.files-container {
+  margin-top: 20px;
+  position: relative;
+}
+
+.files-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  padding-right: 230px; /* Width of action-panel (200px) + gap (20px) + some padding */
+}
+
+.files-list {
+  margin-top: 10px;
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+}
+
+.file-item.selected {
+  background-color: #e3f2fd;
+}
+
+.file-details {
+  margin-left: 10px;
+}
+
+.file-name {
+  font-weight: 500;
+}
+
+.file-type {
+  font-size: 12px;
+  color: #666;
+}
+
+/* Download button */
+.download-button {
+  margin-top: 20px;
+  padding: 10px 20px;
+  background-color: #007BFF;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.download-button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.download-button.downloading {
+  background-color: #28a745;
+  position: relative;
+}
+
+.download-button:not(:disabled):hover {
+  background-color: #0056b3;
+}
+
+/* Search bar */
+.search-container {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.search-input {
+  width: 200px;
+  padding: 8px 12px;
+  font-size: 14px;
+  border: 2px solid #ddd;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #007BFF;
+  width: 300px;
+}
+
+.search-input::placeholder {
+  color: #999;
+}
+
+/* Download History */
+.download-history {
+  margin-top: 30px;
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+}
+
+.history-list {
+  margin-top: 15px;
+}
+
+.history-item {
+  padding: 12px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.history-item:last-child {
+  border-bottom: none;
+}
+
+.history-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history-meta {
+  font-size: 12px;
+  color: #6c757d;
+}
+
+/* Files section layout */
+.files-section {
+  display: flex;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.files-list {
+  flex: 1;
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.action-panel {
+  width: 200px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Update download button styles */
+.download-button {
+  width: 100%;
+  padding: 12px;
+  background-color: #007BFF;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.download-button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.download-button.downloading {
+  background-color: #28a745;
+}
+
+.download-button:not(:disabled):hover {
+  background-color: #0056b3;
+}
+
+.server-path {
+  font-size: 12px;
+  color: #666;
+  margin-top: 4px;
+  font-family: monospace;
+}
