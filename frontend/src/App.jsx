@@ -178,19 +178,20 @@ function FileSyncApp({ customerId, customerName }) {
   };
 
   // Add this function before downloadFiles
-  const saveToPublicFolder = async (downloadUri, fileName, sessionId) => {
+  const saveToPublicFolder = async (downloadUri, fileName, sessionId, driveFileId) => {
     try {
       console.log('Attempting to save file:', {
         fileName,
         sessionId,
+        driveFileId,
         downloadUri: downloadUri.substring(0, 50) + '...'
       });
 
-      // Send the download URI to the backend to handle the download
       const saveResponse = await axios.post('http://localhost:5000/api/save-file', {
         downloadUri,
         fileName,
-        sessionId
+        sessionId,
+        driveFileId
       });
 
       console.log('Save response:', saveResponse.data);
@@ -234,9 +235,7 @@ function FileSyncApp({ customerId, customerName }) {
 
     setIsDownloading(true);
     try {
-      const timestamp = new Date().toISOString();
-      // Include customer name in session ID
-      const sessionId = `${customerName.replace(/[^a-zA-Z0-9-]/g, '-')}_${timestamp.replace(/[:.]/g, '-')}`;
+      const sessionId = customerName.replace(/[^a-zA-Z0-9-]/g, '-');
 
       for (const file of selectedFiles) {
         try {
@@ -252,28 +251,24 @@ function FileSyncApp({ customerId, customerName }) {
           const downloadUri = response.output.downloadUri;
           
           try {
-            // Save to public folder only
             const fullFileName = `${file.name}${file.fileExtension ? `.${file.fileExtension}` : ''}`;
-            const saveResult = await saveToPublicFolder(downloadUri, fullFileName, sessionId);
+            const saveResult = await saveToPublicFolder(downloadUri, fullFileName, sessionId, file.id);
 
             if (saveResult.success) {
-              // Save download metadata
               const downloadInfo = {
                 sessionId,
                 originalUri: downloadUri,
                 fileName: fullFileName,
-                downloadDate: timestamp,
+                downloadDate: new Date().toISOString(),
                 fileId: file.id,
                 integrationKey: file.integrationKey,
                 integrationName: selectedIntegration.name,
                 savedToPublic: saveResult,
                 serverPath: saveResult.publicUrl,
-                customerName // Add customer name to history
+                customerName
               };
 
-              // Save to download history
               saveToDownloadHistory(downloadInfo);
-              
               console.log(`File saved to server: ${fullFileName}`);
             } else {
               console.error(`Failed to save file ${fullFileName} to server:`, saveResult.error);
@@ -301,6 +296,22 @@ function FileSyncApp({ customerId, customerName }) {
   const filteredFiles = integrationFiles.filter(file => 
     file.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Add new function to handle file deletion
+  const deleteCustomerFile = async (file) => {
+    if (window.confirm(`Are you sure you want to delete "${file.name}"?`)) {
+      try {
+        const response = await axios.delete(`http://localhost:5000/api/customer-files/${customerName}/${encodeURIComponent(file.name)}`);
+        if (response.data.success) {
+          // Refresh the files list
+          fetchCustomerFiles();
+        }
+      } catch (error) {
+        console.error('Error deleting file:', error);
+        alert('Failed to delete file. Please try again.');
+      }
+    }
+  };
 
   return (
     <div className="file-sync-container">
@@ -423,6 +434,13 @@ function FileSyncApp({ customerId, customerName }) {
                     Location: {file.path}
                   </div>
                 </div>
+                <button 
+                  className="delete-file-button"
+                  onClick={() => deleteCustomerFile(file)}
+                  title="Delete file"
+                >
+                  🗑️
+                </button>
               </div>
             ))}
           </div>
