@@ -18,12 +18,68 @@ function App() {
 
   return (
     <IntegrationAppProvider fetchToken={fetchToken}>
-      <FileSyncApp customerId={customerId} />
+      <FileSyncApp customerId={customerId} customerName={customerName} />
     </IntegrationAppProvider>
   );
 }
 
-function FileSyncApp({ customerId }) {
+// Move FileSelectionModal outside of FileSyncApp
+const FileSelectionModal = ({ isOpen, onClose, files, selectedFiles, onFileSelect, searchQuery, onSearchChange }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-content">
+        <div className="modal-header">
+          <h3>Select Files</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="modal-search">
+          <input
+            type="text"
+            placeholder="Search files..."
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="search-input"
+            autoFocus
+          />
+        </div>
+
+        <div className="modal-body">
+          <div className="files-list">
+            {files.map((file) => (
+              <div
+                key={file.id}
+                className={`file-item ${
+                  selectedFiles.some(f => f.id === file.id) ? 'selected' : ''
+                }`}
+                onClick={() => onFileSelect(file)}
+              >
+                <div className="file-details">
+                  <div className="file-name">
+                    {file.name}{file.fileExtension ? `.${file.fileExtension}` : ''}
+                  </div>
+                  {file.type && (
+                    <div className="file-type">
+                      Type: {file.type}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="modal-footer">
+          <button className="modal-button" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+function FileSyncApp({ customerId, customerName }) {
   const integrationApp = useIntegrationApp();
   const [integrations, setIntegrations] = useState([]);
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -36,6 +92,9 @@ function FileSyncApp({ customerId }) {
     const saved = localStorage.getItem('downloadHistory');
     return saved ? JSON.parse(saved) : [];
   });
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isBrowsing, setIsBrowsing] = useState(false);
+  const [customerFiles, setCustomerFiles] = useState([]);
 
   // Fetch available integrations
   useEffect(() => {
@@ -60,13 +119,14 @@ function FileSyncApp({ customerId }) {
     return () => clearInterval(interval);
   }, [integrationApp]);
 
-   // Browse files for the selected integration
-   const browseFiles = async () => {
+  // Update the browseFiles function
+  const browseFiles = async () => {
     if (!selectedIntegration) {
       alert('Please select an integration first!');
       return;
     }
 
+    setIsBrowsing(true); // Start loading
     try {
       const { output } = await integrationApp
         .connection(selectedIntegration.key)
@@ -74,12 +134,15 @@ function FileSyncApp({ customerId }) {
         .run();
 
       setIntegrationFiles(output.records);
+      setIsModalOpen(true);
       console.log(`Files fetched from ${selectedIntegration.name}:`, output.records);
     } catch (error) {
       console.error(`Error browsing files for ${selectedIntegration.name}:`, error);
+      alert('Failed to load files. Please try again.');
+    } finally {
+      setIsBrowsing(false); // End loading
     }
   };
-
 
   // Handle file/folder selection
   const selectFileOrFolder = (file) => {
@@ -147,6 +210,21 @@ function FileSyncApp({ customerId }) {
     }
   };
 
+  // Add useEffect to fetch customer files on mount and after downloads
+  useEffect(() => {
+    fetchCustomerFiles();
+  }, [customerName]); // Re-fetch when customer changes
+
+  // Add function to fetch customer files
+  const fetchCustomerFiles = async () => {
+    try {
+      const response = await axios.get(`http://localhost:5000/api/customer-files/${customerName}`);
+      setCustomerFiles(response.data.files);
+    } catch (error) {
+      console.error('Error fetching customer files:', error);
+    }
+  };
+
   // Update the downloadFiles function
   const downloadFiles = async () => {
     if (selectedFiles.length === 0) {
@@ -157,7 +235,8 @@ function FileSyncApp({ customerId }) {
     setIsDownloading(true);
     try {
       const timestamp = new Date().toISOString();
-      const sessionId = timestamp.replace(/[:.]/g, '-');
+      // Include customer name in session ID
+      const sessionId = `${customerName.replace(/[^a-zA-Z0-9-]/g, '-')}_${timestamp.replace(/[:.]/g, '-')}`;
 
       for (const file of selectedFiles) {
         try {
@@ -188,7 +267,8 @@ function FileSyncApp({ customerId }) {
                 integrationKey: file.integrationKey,
                 integrationName: selectedIntegration.name,
                 savedToPublic: saveResult,
-                serverPath: saveResult.publicUrl // Store the server path for reference
+                serverPath: saveResult.publicUrl,
+                customerName // Add customer name to history
               };
 
               // Save to download history
@@ -208,6 +288,7 @@ function FileSyncApp({ customerId }) {
 
       setSelectedFiles([]);
       alert('Files have been saved to the server successfully!');
+      fetchCustomerFiles(); // Refresh the customer files list
       
     } catch (error) {
       console.error('Error in download process:', error);
@@ -277,61 +358,47 @@ function FileSyncApp({ customerId }) {
         ))}
       </div>
 
-      <button onClick={browseFiles} className="browse-button">
-        Browse Files
+      <button 
+        onClick={browseFiles} 
+        className={`browse-button ${isBrowsing ? 'loading' : ''}`}
+        disabled={isBrowsing}
+      >
+        {isBrowsing ? 'Loading Files...' : 'Browse Files'}
       </button>
 
-      {integrationFiles.length > 0 && (
-        <div className="files-container">
-          <div className="files-header">
-            <h3>Files from {selectedIntegration?.name}</h3>
-            <div className="search-container">
-              <input
-                type="text"
-                placeholder="Search files..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="search-input"
-              />
-            </div>
-          </div>
-
-          <div className="files-section">
-            <div className="files-list">
-              {filteredFiles.map((file) => (
-                <div
-                  key={file.id}
-                  className={`file-item ${
-                    selectedFiles.some(f => f.id === file.id) ? 'selected' : ''
-                  }`}
-                  onClick={() => selectFileOrFolder(file)}
-                >
-                  <div className="file-details">
-                    <div className="file-name">
-                      {file.name}{file.fileExtension ? `.${file.fileExtension}` : ''}
-                    </div>
-                    {file.type && (
-                      <div className="file-type">
-                        Type: {file.type}
-                      </div>
-                    )}
-                  </div>
+      {selectedFiles.length > 0 && (
+        <div className="selected-files-panel">
+          <div className="selected-files-content">
+            <h3>Selected Files ({selectedFiles.length})</h3>
+            <div className="selected-files-list">
+              {selectedFiles.map((file) => (
+                <div key={file.id} className="selected-file-item">
+                  {file.name}{file.fileExtension ? `.${file.fileExtension}` : ''}
                 </div>
               ))}
             </div>
-
-            <div className="action-panel">
-              <button 
-                onClick={downloadFiles} 
-                className={`download-button ${isDownloading ? 'downloading' : ''}`}
-                disabled={isDownloading || selectedFiles.length === 0}
-              >
-                {isDownloading ? 'Downloading...' : 'Download Selected Files'}
-              </button>
-            </div>
+          </div>
+          <div className="action-panel">
+            <button 
+              onClick={downloadFiles} 
+              className={`download-button ${isDownloading ? 'downloading' : ''}`}
+              disabled={isDownloading || selectedFiles.length === 0}
+            >
+              {isDownloading ? 'Downloading...' : 'Download Selected Files'}
+            </button>
           </div>
         </div>
       )}
+
+      <FileSelectionModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        files={filteredFiles}
+        selectedFiles={selectedFiles}
+        onFileSelect={selectFileOrFolder}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+      />
 
       <h2>Sync Folders</h2>
       <ul>
@@ -339,6 +406,28 @@ function FileSyncApp({ customerId }) {
           <li key={folder.id}>{folder.name}</li>
         ))}
       </ul>
+
+      {customerFiles.length > 0 && (
+        <div className="customer-files">
+          <h2>Files for {customerName}</h2>
+          <div className="files-grid">
+            {customerFiles.map((file) => (
+              <div key={file.path} className="customer-file-item">
+                <div className="file-icon">📄</div>
+                <div className="file-info">
+                  <div className="file-name">{file.name}</div>
+                  <div className="file-meta">
+                    Downloaded: {new Date(file.downloadDate).toLocaleString()}
+                  </div>
+                  <div className="file-path">
+                    Location: {file.path}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {downloadHistory.length > 0 && (
         <div className="download-history">

@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { readdir, stat } from 'fs/promises';
 
 dotenv.config({ path: './.env' });
 
@@ -181,6 +182,55 @@ app.post('/api/save-file', async (req, res) => {
       error: 'Failed to save file',
       details: error.message 
     });
+  }
+});
+
+// Add this endpoint to list customer files
+app.get('/api/customer-files/:customerName', async (req, res) => {
+  try {
+    const { customerName } = req.params;
+    const sanitizedCustomerName = customerName.replace(/[^a-zA-Z0-9-]/g, '-');
+    const downloadsPath = path.join(__dirname, 'downloads');
+    
+    // Get all directories
+    const directories = await readdir(downloadsPath);
+    
+    // Filter directories that start with the customer name
+    const customerDirs = directories.filter(dir => 
+      dir.startsWith(sanitizedCustomerName + '_')
+    );
+
+    let allFiles = [];
+
+    // Get files from each customer directory
+    for (const dir of customerDirs) {
+      const dirPath = path.join(downloadsPath, dir);
+      const files = await readdir(dirPath);
+      
+      // Get details for each file
+      const fileDetails = await Promise.all(
+        files.map(async (fileName) => {
+          const filePath = path.join(dirPath, fileName);
+          const stats = await stat(filePath);
+          return {
+            name: fileName,
+            path: `/downloads/${dir}/${fileName}`,
+            downloadDate: stats.birthtime,
+            size: stats.size
+          };
+        })
+      );
+      
+      allFiles = [...allFiles, ...fileDetails];
+    }
+
+    // Sort files by download date, newest first
+    allFiles.sort((a, b) => b.downloadDate - a.downloadDate);
+
+    res.json({ files: allFiles });
+  } catch (error) {
+    console.error('Error getting customer files:', error);
+    res.status(500).json({ error: 'Failed to get customer files' });
   }
 });
 
