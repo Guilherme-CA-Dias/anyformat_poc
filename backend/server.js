@@ -79,16 +79,38 @@ app.post('/api/generate-token', (req, res) => {
   }
 });
 
+/**
+ * File Save Endpoint
+ * Handles the secure downloading and storage of files from various integrations
+ * 
+ * Flow:
+ * 1. Receives download URL and file info from frontend
+ * 2. Downloads file using secure URL
+ * 3. Saves file to customer's directory
+ * 4. Maintains version history and file mappings
+ * 5. Returns public access URL
+ */
 app.post('/api/save-file', async (req, res) => {
   try {
+    // Get file information from request
     const { downloadUri, fileName, sessionId, driveFileId } = req.body;
+
+    // Clean filename to be safe for all operating systems
     const sanitizedFileName = fileName
       .replace(/[<>:"/\\|?*]/g, '-')
       .replace(/\//g, '-')
       .replace(/\s+/g, '_')
       .trim();
 
-    // Store file mapping if driveFileId exists
+    console.log('Received file save request:', {
+      originalFileName: fileName,
+      sanitizedFileName,
+      sessionId,
+      driveFileId,
+      downloadUri: downloadUri.substring(0, 50) + '...'
+    });
+
+    // Load and update file mappings for version tracking
     const mappings = await loadFileMappings();
     if (driveFileId) {
       const fileEntry = {
@@ -104,6 +126,7 @@ app.post('/api/save-file', async (req, res) => {
         currentVersion: '1.0'
       };
 
+      // Update or add new file entry
       const index = mappings.findIndex(f => f.driveFileId === driveFileId);
       if (index !== -1) {
         mappings.splice(index, 1);
@@ -112,28 +135,41 @@ app.post('/api/save-file', async (req, res) => {
       await saveFileMappings(mappings);
     }
 
-    // Save the actual file
+    // Create customer directory if it doesn't exist
     const downloadPath = path.join(__dirname, 'downloads', sessionId);
     await fs.mkdir(downloadPath, { recursive: true });
     
+    // Download file from the secure URL
     const response = await axios({
       method: 'get',
       url: downloadUri,
       responseType: 'stream'
     });
 
+    // Save file to disk using streams for efficient memory usage
     const filePath = path.join(downloadPath, sanitizedFileName);
     const writer = createWriteStream(filePath);
     response.data.pipe(writer);
 
+    // Wait for file to finish writing
     await new Promise((resolve, reject) => {
       writer.on('finish', resolve);
       writer.on('error', reject);
     });
 
+    // Generate public access URL
     const publicPath = `/downloads/${sessionId}/${sanitizedFileName}`;
     const fullUrl = `http://localhost:${PORT}${publicPath}`;
 
+    console.log('File saved successfully:', {
+      originalName: fileName,
+      savedAs: sanitizedFileName,
+      filePath,
+      publicUrl: fullUrl,
+      driveFileId
+    });
+
+    // Return success response with file access information
     res.json({
       success: true,
       filePath: publicPath,
@@ -190,38 +226,37 @@ app.get('/api/customer-files/:customerName', async (req, res) => {
 app.post('/api/webhook/file-updates', async (req, res) => {
   try {
     const { 
-      customerName,
-      fileId,
-      driveFileId,
-      fileName,
-      downloadUri,
-      version,
-      action
+      event,
+      source,
+      id,
+      record,
+      iappDownloadId
     } = req.body;
 
     console.log('Received webhook payload:', {
-      customerName,
-      fileId,
-      driveFileId,
-      fileName,
-      version,
-      action
+      event,
+      source,
+      id,
+      fileName: record?.name,
+      downloadUrl: iappDownloadId?.downloadUri
     });
 
     const mappings = await loadFileMappings();
-    const actualFileId = driveFileId || fileId;
-    const fileIndex = mappings.findIndex(f => f.driveFileId === actualFileId);
+    const fileIndex = mappings.findIndex(f => f.driveFileId === id);
 
     // If file doesn't exist in our mappings, ignore the webhook
     if (fileIndex === -1) {
-      console.log('File not found in mappings, ignoring webhook');
+      console.log('File not found in mappings:', {
+        receivedId: id,
+        availableMappings: mappings.map(m => m.driveFileId)
+      });
       return res.json({ success: true, message: 'File not tracked, ignoring update' });
     }
 
     const existingFile = mappings[fileIndex];
 
-    if (action === 'delete') {
-      console.log(`Marking file as deleted: ${fileName}`);
+    if (event === 'delete') {
+      console.log(`Marking file as deleted: ${record?.name}`);
       mappings[fileIndex].deleted = true;
       mappings[fileIndex].deletedAt = new Date().toISOString();
       await saveFileMappings(mappings);
@@ -229,24 +264,24 @@ app.post('/api/webhook/file-updates', async (req, res) => {
     }
 
     // Handle file update
-    console.log(`Updating file: ${fileName} to version ${version}`);
+    console.log(`Updating file: ${record?.name} to version ${record?.version}`);
     
     existingFile.versions.push({
-      version,
+      version: record?.version,
       timestamp: new Date().toISOString(),
-      downloadUri
+      downloadUri: record?.downloadUri
     });
-    existingFile.currentVersion = version;
+    existingFile.currentVersion = record?.version;
 
     // Update the file content
-    const customerPath = path.join(__dirname, 'downloads', customerName.replace(/[^a-zA-Z0-9-]/g, '-'));
+    const customerPath = path.join(__dirname, 'downloads', existingFile.customerName);
     const sanitizedFileName = existingFile.sanitizedName;
     const filePath = path.join(customerPath, sanitizedFileName);
 
     console.log('Downloading updated file content');
     const response = await axios({
       method: 'get',
-      url: downloadUri,
+      url: iappDownloadId.downloadUri,
       responseType: 'stream'
     });
 
