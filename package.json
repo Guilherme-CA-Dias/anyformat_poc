@@ -1,5 +1,32 @@
 {
+  "name": "anyformat",
+  "version": "1.0.0",
+  "description": "File sync application using integration.app",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "install-all": "npm install && cd frontend && npm install && cd ../backend && npm install",
+    "start-frontend": "cd frontend && npm run dev",
+    "start-backend": "cd backend && node server.js",
+    "start": "concurrently \"npm run start-backend\" \"npm run start-frontend\"",
+    "setup": "node setup.js"
+  },
   "dependencies": {
-    "dotenv": "^16.4.5"
-  }
+    "concurrently": "^8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/IntegrationApp"
+  },
+  "keywords": [
+    "integration.app",
+    "file-sync",
+    "google-drive",
+    "onedrive",
+    "sharepoint"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "readme": "README.md"
 }
