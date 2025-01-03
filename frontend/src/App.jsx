@@ -29,94 +29,6 @@ function App() {
   );
 }
 
-// Move FileSelectionModal outside of FileSyncApp
-const FileSelectionModal = ({ isOpen, onClose, files, selectedFiles, onFileSelect, searchQuery, onSearchChange, folderPath, navigateToFolder }) => {
-  if (!isOpen) return null;
-
-  const getFileIcon = (file) => {
-    return file.fields?.itemType === 'folder' ? '📁' : '📄';
-  };
-
-  const formatFileSize = (bytes) => {
-    if (!bytes) return 'Unknown size';
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
-  };
-
-  return (
-    <div className="modal-overlay">
-      <div className="modal-content">
-        <div className="modal-header">
-          <h3>Select Files</h3>
-          <button className="modal-close" onClick={onClose}>×</button>
-        </div>
-
-        <div className="modal-search">
-          <input
-            type="text"
-            placeholder="Search files..."
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="search-input"
-            autoFocus
-          />
-        </div>
-
-        <div className="modal-body">
-          <div className="folder-breadcrumbs">
-            {folderPath.map((folder, index) => (
-              <React.Fragment key={folder.id}>
-                {index > 0 && <span className="breadcrumb-separator">/</span>}
-                <span 
-                  className="breadcrumb-item"
-                  onClick={() => navigateToFolder(folder.id)}
-                >
-                  {folder.name}
-                </span>
-              </React.Fragment>
-            ))}
-          </div>
-          <div className="files-list">
-            {files.map((file) => (
-              <div
-                key={file.id}
-                className={`file-item ${
-                  selectedFiles.some(f => f.id === file.id) ? 'selected' : ''
-                }`}
-                onClick={() => onFileSelect(file)}
-              >
-                <div className="file-icon">
-                  {getFileIcon(file)}
-                </div>
-                <div className="file-details">
-                  <div className="file-name">
-                    {file.name}{file.fileExtension ? `.${file.fileExtension}` : ''}
-                  </div>
-                  <div className="file-meta">
-                    {file.fields?.itemType === 'folder' ? (
-                      'Folder'
-                    ) : (
-                      <>
-                        {formatFileSize(file.fields?.size)} • 
-                        {file.fields?.mimeType || 'Unknown type'}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="modal-footer">
-          <button className="modal-button" onClick={onClose}>Done</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 function FileSyncApp({ customerId, customerName }) {
   const integrationApp = useIntegrationApp();
   const [integrations, setIntegrations] = useState([]);
@@ -135,7 +47,11 @@ function FileSyncApp({ customerId, customerName }) {
   const [folderPath, setFolderPath] = useState([{ id: 'root', name: 'Root' }]);
   const [downloadProgress, setDownloadProgress] = useState({});
   const [fileErrors, setFileErrors] = useState({});
-  const [syncStatus, setSyncStatus] = useState({});
+  const [currentFolderId, setCurrentFolderId] = useState('root');
+  const [folderStack, setFolderStack] = useState([{ id: 'root', name: 'My Drive' }]);
+  const [isFolderLoading, setIsFolderLoading] = useState(false);
+  const [isLoadingBackground, setIsLoadingBackground] = useState(false);
+  const [scrollPosition, setScrollPosition] = useState(0);
 
   // Fetch and monitor available integrations from integration.app
   useEffect(() => {
@@ -144,7 +60,13 @@ function FileSyncApp({ customerId, customerName }) {
     const fetchIntegrations = async () => {
       try {
         const { items: integrations } = await integrationApp.integrations.find();
-        setIntegrations(integrations);
+        setIntegrations(prev => {
+          // Only update if there are actual changes to prevent unnecessary re-renders
+          if (JSON.stringify(prev) !== JSON.stringify(integrations)) {
+            return integrations;
+          }
+          return prev;
+        });
       } catch (error) {
         console.error("Error fetching integrations:", error);
       }
@@ -155,29 +77,88 @@ function FileSyncApp({ customerId, customerName }) {
     return () => clearInterval(interval);
   }, [integrationApp]);
 
+  // Add scroll position preservation
+  useEffect(() => {
+    const handleScroll = () => {
+      setScrollPosition(window.scrollY);
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // After any state update that might cause a re-render
+  useEffect(() => {
+    window.scrollTo(0, scrollPosition);
+  }, [integrations]); // Add other dependencies if needed
+
   // Function to browse files from selected integration
-  const browseFiles = async () => {
+  const browseFiles = async (folderId = 'root', cursor = null) => {
     if (!selectedIntegration) {
       alert('Please select an integration first!');
       return;
     }
 
-    setIsBrowsing(true);
+    const isInitialLoad = !cursor;
+    if (isInitialLoad) {
+      setIsBrowsing(true);
+      setIsFolderLoading(true);
+      setIntegrationFiles([]); // Clear existing files on new folder
+    } else {
+      setIsLoadingBackground(true);
+    }
+
     try {
-      // Call integration.app to get files from the selected integration (e.g., Google Drive)
+      const cleanFolderId = typeof folderId === 'string' ? folderId : 'root';
+
+      // Create action parameters object
+      const actionParams = {
+        includeFields: true,
+        pageSize: 100,
+        cursor: cursor
+      };
+
+      // Only add folderId if it's not 'root'
+      if (cleanFolderId !== 'root') {
+        actionParams.folderId = cleanFolderId;
+      }
+
       const { output } = await integrationApp
         .connection(selectedIntegration.key)
-        .action('get-drive-items') // Action to list files/folders
-        .run();
+        .action('get-drive-items')
+        .run(actionParams);
 
-      setIntegrationFiles(output.records);
-      setIsModalOpen(true);
-      console.log(`Files fetched from ${selectedIntegration.name}:`, output.records);
+      // Update files list
+      setIntegrationFiles(prev => 
+        cursor ? [...prev, ...output.records] : output.records
+      );
+
+      // If there are more files, automatically fetch them
+      if (output.cursor) {
+        setTimeout(() => {
+          browseFiles(cleanFolderId, output.cursor);
+        }, 100);
+      }
+
+      if (isInitialLoad) {
+        setCurrentFolderId(cleanFolderId);
+        setIsModalOpen(true);
+      }
     } catch (error) {
-      console.error(`Error browsing files for ${selectedIntegration.name}:`, error);
-      alert('Failed to load files. Please try again.');
+      console.error(`Error browsing files for ${selectedIntegration.name}:`, {
+        message: error.message,
+        name: error.name
+      });
+      if (!cursor) {
+        alert('Failed to load files. Please try again.');
+      }
     } finally {
-      setIsBrowsing(false);
+      if (isInitialLoad) {
+        setIsBrowsing(false);
+        setIsFolderLoading(false);
+      } else {
+        setIsLoadingBackground(false);
+      }
     }
   };
 
@@ -241,7 +222,8 @@ function FileSyncApp({ customerId, customerName }) {
   // Add function to fetch customer files
   const fetchCustomerFiles = async () => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/customer-files/${customerName}`);
+      const sanitizedName = customerName.replace(/[^a-zA-Z0-9-]/g, '-');
+      const response = await axios.get(`http://localhost:5000/api/customer-files/${sanitizedName}`);
       setCustomerFiles(response.data.files);
     } catch (error) {
       console.error('Error fetching customer files:', error);
@@ -250,88 +232,60 @@ function FileSyncApp({ customerId, customerName }) {
 
   // Function to handle downloading selected files
   const downloadFiles = async () => {
-    // Validate if there are files selected
     if (selectedFiles.length === 0) {
       alert('Please select files to download');
       return;
     }
 
-    // Show downloading state in UI
     setIsDownloading(true);
     try {
-      // Create a safe folder name from customer name (remove special characters)
-      const sessionId = customerName.replace(/[^a-zA-Z0-9-]/g, '-');
+      // Get all file IDs from selected files
+      const fileIds = selectedFiles.map(file => file.id);
 
-      // Process each selected file
-      for (const file of selectedFiles) {
-        try {
-          console.log(`Downloading file: ${file.name} with ID: ${file.id}`);
-          
-          // Step 1: Get secure download URL from integration.app
-          // This ensures we have proper authorization to access the file
-          // file.integrationKey could be 'google-drive', 'dropbox', etc.
-          const response = await integrationApp
-            .connection(file.integrationKey)
-            .action('download-file-by-id')
-            .run({
-              fileId: file.id
-            });
-
-          // Extract the temporary download URL from the response
-          const downloadUri = response.output.downloadUri;
-          
-          try {
-            // Step 2: Construct the full filename with extension
-            const fullFileName = `${file.name}${file.fileExtension ? `.${file.fileExtension}` : ''}`;
-
-            // Step 3: Send the download URL to our backend to save the file
-            // This keeps sensitive URLs secure and handles file storage properly
-            const saveResult = await saveToPublicFolder(downloadUri, fullFileName, sessionId, file.id);
-
-            if (saveResult.success) {
-              // Step 4: Record the download in history for tracking
-              const downloadInfo = {
-                sessionId,
-                originalUri: downloadUri,
-                fileName: fullFileName,
-                downloadDate: new Date().toISOString(),
-                fileId: file.id,
-                integrationKey: file.integrationKey,
-                integrationName: selectedIntegration.name,
-                savedToPublic: saveResult,
-                serverPath: saveResult.publicUrl,
-                customerName
-              };
-
-              saveToDownloadHistory(downloadInfo);
-              console.log(`File saved to server: ${fullFileName}`);
-            } else {
-              console.error(`Failed to save file ${fullFileName} to server:`, saveResult.error);
-            }
-          } catch (saveError) {
-            console.error(`Error saving file ${file.name}:`, saveError);
+      // Start the download flow
+      await integrationApp
+        .connection(selectedIntegration.key)
+        .flow('download-files')
+        .run({
+          input: {
+            fileIds
           }
-        } catch (error) {
-          console.error(`Error getting download URL for ${file.name}:`, error);
-        }
-      }
+        });
 
-      // Step 5: Clean up and update UI
+      // Show success message
+      alert('Your files will be downloaded shortly. You can continue using the app.');
+      
+      // Clear selected files
       setSelectedFiles([]);
-      alert('Files have been saved to the server successfully!');
-      fetchCustomerFiles(); // Refresh the files list
+      
+      // Add a small delay before fetching files to allow for download completion
+      setTimeout(() => {
+        fetchCustomerFiles();
+      }, 2000);
       
     } catch (error) {
-      console.error('Error in download process:', error);
-      alert('Some files failed to save. Check console for details.');
+      console.error('Error starting download flow:', error);
+      alert('Failed to start download process. Please try again.');
     } finally {
       setIsDownloading(false);
     }
   };
 
-  const filteredFiles = integrationFiles.filter(file => 
-    file.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredFiles = React.useMemo(() => {
+    return integrationFiles.filter(file => {
+      if (!searchQuery) {
+        return file.fields?.folderId === currentFolderId || 
+          (currentFolderId === 'root' && !file.fields?.folderId);
+      }
+      
+      const query = searchQuery.toLowerCase();
+      return (
+        file.name.toLowerCase().includes(query) ||
+        file.fields?.mimeType?.toLowerCase().includes(query) ||
+        file.fileExtension?.toLowerCase().includes(query)
+      );
+    });
+  }, [integrationFiles, searchQuery, currentFolderId]);
 
   // Add new function to handle file deletion
   const deleteCustomerFile = async (file) => {
@@ -364,38 +318,141 @@ function FileSyncApp({ customerId, customerName }) {
     // Implement folder navigation logic here
   };
 
-  // Add function to toggle sync
-  const toggleSync = async (integration) => {
-    try {
-      if (syncStatus[integration.key]) {
-        // Stop sync
-        await integrationApp
-          .connection(integration.key)
-          .flow('receive-drive-item-events')
-          .delete();
-        
-        setSyncStatus(prev => ({
-          ...prev,
-          [integration.key]: false
-        }));
-        console.log(`Sync stopped for ${integration.name}`);
+  // Add formatFileSize utility function
+  const formatFileSize = (bytes) => {
+    if (!bytes) return 'Unknown size';
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
+  };
+
+  // Move FileSelectionModal inside FileSyncApp
+  const FileSelectionModal = ({ isOpen, onClose, files, selectedFiles, onFileSelect, searchQuery, onSearchChange }) => {
+    if (!isOpen) return null;
+
+    const handleItemClick = (item) => {
+      if (item.fields?.itemType === 'folder') {
+        // If it's a folder, update the folder stack and browse its contents
+        setFolderStack(prev => [...prev, { id: item.id, name: item.name }]);
+        // Pass only the folder ID
+        browseFiles(item.id);
       } else {
-        // Start sync
-        await integrationApp
-          .connection(integration.key)
-          .flow('receive-drive-item-events')
-          .create();
-        
-        setSyncStatus(prev => ({
-          ...prev,
-          [integration.key]: true
-        }));
-        console.log(`Sync started for ${integration.name}`);
+        // If it's a file, handle selection
+        onFileSelect(item);
       }
-    } catch (error) {
-      console.error(`Error toggling sync for ${integration.name}:`, error);
-      alert(`Failed to ${syncStatus[integration.key] ? 'stop' : 'start'} sync. Please try again.`);
-    }
+    };
+
+    const handleBackClick = () => {
+      if (folderStack.length > 1) {
+        // Remove current folder from stack
+        const newStack = folderStack.slice(0, -1);
+        setFolderStack(newStack);
+        // Navigate to parent folder - pass only the ID
+        const parentFolder = newStack[newStack.length - 1];
+        browseFiles(parentFolder.id);
+      }
+    };
+
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content">
+          <div className="modal-header">
+            <h3>Select Files</h3>
+            <button className="modal-close" onClick={onClose}>×</button>
+          </div>
+
+          <div className="modal-search">
+            <input
+              type="text"
+              placeholder="Search files..."
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="search-input"
+              autoFocus
+            />
+          </div>
+
+          <div className="modal-body">
+            {/* Folder navigation breadcrumbs */}
+            <div className="folder-breadcrumbs">
+              {folderStack.map((folder, index) => (
+                <React.Fragment key={folder.id}>
+                  {index > 0 && <span className="breadcrumb-separator">/</span>}
+                  <span 
+                    className="breadcrumb-item"
+                    onClick={() => {
+                      const newStack = folderStack.slice(0, index + 1);
+                      setFolderStack(newStack);
+                      browseFiles(folder.id);
+                    }}
+                  >
+                    {folder.name}
+                  </span>
+                </React.Fragment>
+              ))}
+            </div>
+
+            {/* Back button */}
+            {folderStack.length > 1 && (
+              <div className="folder-navigation">
+                <button onClick={handleBackClick} className="back-button">
+                  ← Back to {folderStack[folderStack.length - 2].name}
+                </button>
+              </div>
+            )}
+
+            <div className="files-list">
+              {isFolderLoading ? (
+                <div className="loading-indicator">Loading folder contents...</div>
+              ) : files.length === 0 ? (
+                <div className="empty-folder">This folder is empty</div>
+              ) : (
+                <>
+                  {files.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`file-item ${
+                        selectedFiles.some(f => f.id === item.id) ? 'selected' : ''
+                      }`}
+                      onClick={() => handleItemClick(item)}
+                    >
+                      <div className="file-icon">
+                        {item.fields?.itemType === 'folder' ? '📁' : '📄'}
+                      </div>
+                      <div className="file-details">
+                        <div className="file-name" title={`${item.name}${item.fileExtension ? `.${item.fileExtension}` : ''}`}>
+                          {item.name}{item.fileExtension ? `.${item.fileExtension}` : ''}
+                        </div>
+                        <div className="file-meta">
+                          {item.fields?.itemType === 'folder' ? (
+                            'Folder'
+                          ) : (
+                            <>
+                              {formatFileSize(item.fields?.size)} • 
+                              {item.fields?.mimeType || 'Unknown type'}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {isLoadingBackground && (
+                    <div className="background-loading">
+                      Loading more files...
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button className="modal-button" onClick={onClose}>Done</button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -456,30 +513,6 @@ function FileSyncApp({ customerId, customerName }) {
               ))}
             </div>
           </div>
-          
-          <div className="sync-settings">
-            <h2>Sync Settings</h2>
-            <div className="sync-options">
-              {integrations.map((integration) => (
-                integration.connection?.disconnected === false && (
-                  <div key={integration.key} className="sync-option">
-                    <span className="sync-integration-name">{integration.name}</span>
-                    <label className="switch">
-                      <input
-                        type="checkbox"
-                        checked={syncStatus[integration.key] || false}
-                        onChange={() => toggleSync(integration)}
-                      />
-                      <span className="slider round"></span>
-                    </label>
-                    <span className="sync-status">
-                      {syncStatus[integration.key] ? 'Sync On' : 'Sync Off'}
-                    </span>
-                  </div>
-                )
-              ))}
-            </div>
-          </div>
         </div>
 
         <button 
@@ -518,7 +551,7 @@ function FileSyncApp({ customerId, customerName }) {
                 className={`download-button ${isDownloading ? 'downloading' : ''}`}
                 disabled={isDownloading || selectedFiles.length === 0}
               >
-                {isDownloading ? 'Downloading...' : 'Download Selected Files'}
+                {isDownloading ? 'Starting Download...' : 'Download Selected Files'}
               </button>
             </div>
           </div>

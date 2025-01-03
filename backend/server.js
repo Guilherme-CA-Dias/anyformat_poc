@@ -3,7 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import path from 'path';
-import fs from 'fs/promises';
+import fs from 'fs';
+import * as fsPromises from 'fs/promises';
 import { createWriteStream } from 'fs';
 import axios from 'axios';
 import { fileURLToPath } from 'url';
@@ -35,12 +36,12 @@ const FILE_MAPPINGS_PATH = path.join(__dirname, 'downloads', 'file-mappings.json
 
 const loadFileMappings = async () => {
   try {
-    const data = await fs.readFile(FILE_MAPPINGS_PATH, 'utf8');
+    const data = await fsPromises.readFile(FILE_MAPPINGS_PATH, 'utf8');
     return JSON.parse(data);
   } catch (error) {
     if (error.code === 'ENOENT') {
       const initialMappings = [];
-      await fs.writeFile(FILE_MAPPINGS_PATH, JSON.stringify(initialMappings, null, 2));
+      await fsPromises.writeFile(FILE_MAPPINGS_PATH, JSON.stringify(initialMappings, null, 2));
       return initialMappings;
     }
     throw error;
@@ -48,7 +49,18 @@ const loadFileMappings = async () => {
 };
 
 const saveFileMappings = async (mappings) => {
-  await fs.writeFile(FILE_MAPPINGS_PATH, JSON.stringify(mappings, null, 2));
+  await fsPromises.writeFile(FILE_MAPPINGS_PATH, JSON.stringify(mappings, null, 2));
+};
+
+// Update the sanitizePath function to be more strict
+const sanitizePath = (path) => {
+  return path
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')        // Replace spaces with hyphens
+    .replace(/[^a-z0-9-]/g, '')  // Remove all other special characters
+    .replace(/-+/g, '-')         // Replace multiple hyphens with single hyphen
+    .replace(/^-|-$/g, '');      // Remove leading/trailing hyphens
 };
 
 // Endpoints
@@ -92,22 +104,34 @@ app.post('/api/generate-token', (req, res) => {
  */
 app.post('/api/save-file', async (req, res) => {
   try {
-    // Get file information from request
     const { downloadUri, fileName, sessionId, driveFileId } = req.body;
 
-    // Clean filename to be safe for all operating systems
-    const sanitizedFileName = fileName
-      .replace(/[<>:"/\\|?*]/g, '-')
-      .replace(/\//g, '-')
-      .replace(/\s+/g, '_')
-      .trim();
+    // Sanitize the sessionId using the correct pattern
+    const sanitizedSessionId = sessionId.replace(/[^a-zA-Z0-9-]/g, '-');
+    
+    console.log('Session ID:', { 
+      original: sessionId, 
+      sanitized: sanitizedSessionId 
+    });
 
-    console.log('Received file save request:', {
-      originalFileName: fileName,
-      sanitizedFileName,
-      sessionId,
-      driveFileId,
-      downloadUri: downloadUri.substring(0, 50) + '...'
+    const customerDir = path.join(__dirname, 'downloads', sanitizedSessionId);
+
+    // Create customer directory if it doesn't exist
+    if (!fs.existsSync(customerDir)) {
+      fs.mkdirSync(customerDir, { recursive: true });
+    }
+
+    // Sanitize the filename but preserve extension
+    const fileExt = path.extname(fileName);
+    const fileNameWithoutExt = path.basename(fileName, fileExt);
+    const sanitizedFileName = `${fileNameWithoutExt.replace(/[^a-zA-Z0-9-]/g, '_')}${fileExt}`;
+    
+    const filePath = path.join(customerDir, sanitizedFileName);
+    
+    console.log('File paths:', {
+      customerDir,
+      filePath,
+      sanitizedFileName
     });
 
     // Load and update file mappings for version tracking
@@ -135,10 +159,6 @@ app.post('/api/save-file', async (req, res) => {
       await saveFileMappings(mappings);
     }
 
-    // Create customer directory if it doesn't exist
-    const downloadPath = path.join(__dirname, 'downloads', sessionId);
-    await fs.mkdir(downloadPath, { recursive: true });
-    
     // Download file from the secure URL
     const response = await axios({
       method: 'get',
@@ -146,19 +166,17 @@ app.post('/api/save-file', async (req, res) => {
       responseType: 'stream'
     });
 
-    // Save file to disk using streams for efficient memory usage
-    const filePath = path.join(downloadPath, sanitizedFileName);
-    const writer = createWriteStream(filePath);
+    // Save file to disk using streams
+    const writer = fs.createWriteStream(filePath);
     response.data.pipe(writer);
 
-    // Wait for file to finish writing
     await new Promise((resolve, reject) => {
       writer.on('finish', resolve);
       writer.on('error', reject);
     });
 
-    // Generate public access URL
-    const publicPath = `/downloads/${sessionId}/${sanitizedFileName}`;
+    // Generate public access URL using sanitized paths
+    const publicPath = `/downloads/${sanitizedSessionId}/${sanitizedFileName}`;
     const fullUrl = `http://localhost:${PORT}${publicPath}`;
 
     console.log('File saved successfully:', {
@@ -169,15 +187,16 @@ app.post('/api/save-file', async (req, res) => {
       driveFileId
     });
 
-    // Return success response with file access information
+    // Return response with sanitized paths
     res.json({
       success: true,
-      filePath: publicPath,
-      fileUrl: fullUrl,
+      filePath: `/downloads/${sanitizedSessionId}/${sanitizedFileName}`,
+      fileUrl: `http://localhost:${PORT}/downloads/${sanitizedSessionId}/${sanitizedFileName}`,
       originalName: fileName,
       savedAs: sanitizedFileName,
       driveFileId
     });
+
   } catch (error) {
     console.error('Error saving file:', error);
     res.status(500).json({ 
@@ -189,37 +208,30 @@ app.post('/api/save-file', async (req, res) => {
 
 app.get('/api/customer-files/:customerName', async (req, res) => {
   try {
-    const { customerName } = req.params;
-    const sanitizedCustomerName = customerName.replace(/[^a-zA-Z0-9-]/g, '-');
-    const customerPath = path.join(__dirname, 'downloads', sanitizedCustomerName);
+    const sanitizedCustomerName = req.params.customerName.replace(/[^a-zA-Z0-9-]/g, '-');
+    const customerDir = path.join(__dirname, 'downloads', sanitizedCustomerName);
     
-    try {
-      const files = await readdir(customerPath);
-      const fileDetails = await Promise.all(
-        files.map(async (fileName) => {
-          const filePath = path.join(customerPath, fileName);
-          const stats = await stat(filePath);
-          return {
-            name: fileName,
-            path: `/downloads/${sanitizedCustomerName}/${fileName}`,
-            downloadDate: stats.birthtime,
-            size: stats.size
-          };
-        })
-      );
-      
-      fileDetails.sort((a, b) => b.downloadDate - a.downloadDate);
-      res.json({ files: fileDetails });
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        res.json({ files: [] });
-      } else {
-        throw error;
-      }
+    if (!fs.existsSync(customerDir)) {
+      return res.json({ files: [] });
     }
+
+    const files = fs.readdirSync(customerDir)
+      .filter(file => fs.statSync(path.join(customerDir, file)).isFile())
+      .map(file => {
+        const filePath = path.join(customerDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          name: file,
+          path: path.join(sanitizedCustomerName, file),
+          size: stats.size,
+          downloadDate: stats.mtime
+        };
+      });
+
+    res.json({ files });
   } catch (error) {
-    console.error('Error getting customer files:', error);
-    res.status(500).json({ error: 'Failed to get customer files' });
+    console.error('Error reading customer files:', error);
+    res.status(500).json({ error: 'Failed to read customer files' });
   }
 });
 
@@ -313,29 +325,20 @@ app.post('/api/webhook/file-updates', async (req, res) => {
 
 app.delete('/api/customer-files/:customerName/:fileName', async (req, res) => {
   try {
-    const { customerName, fileName } = req.params;
-    const sanitizedCustomerName = customerName.replace(/[^a-zA-Z0-9-]/g, '-');
-    const filePath = path.join(__dirname, 'downloads', sanitizedCustomerName, fileName);
-
-    // Delete the file
-    await fs.unlink(filePath);
-
-    // Update mappings if file is tracked
-    const mappings = await loadFileMappings();
-    const fileIndex = mappings.findIndex(f => f.sanitizedName === fileName);
-    if (fileIndex !== -1) {
-      mappings.splice(fileIndex, 1);
-      await saveFileMappings(mappings);
+    const sanitizedCustomerName = sanitizePath(req.params.customerName);
+    const sanitizedFileName = req.params.fileName; // fileName is already encoded in URL
+    
+    const filePath = path.join(__dirname, 'downloads', sanitizedCustomerName, sanitizedFileName);
+    
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'File not found' });
     }
-
-    console.log(`File deleted successfully: ${fileName}`);
-    res.json({ success: true, message: 'File deleted successfully' });
   } catch (error) {
     console.error('Error deleting file:', error);
-    res.status(500).json({ 
-      error: 'Failed to delete file',
-      details: error.message 
-    });
+    res.status(500).json({ error: 'Failed to delete file' });
   }
 });
 
